@@ -14,8 +14,10 @@
  *      low *structure* gradient regions (gradient of a median-filtered L,
  *      so skin speckles are not treated as edges). Large flat fills such
  *      as anime skin collapse toward the local dominant color.
- *   6. Guided filter: stronger on chroma than luma, weighted by structure edges.
- *   7. Very light unsharp on structural edges so lineart stays crisp.
+ *   6. Seal skin fills to nearby ink (close the light AA seam) and fill
+ *      light holes that sit on dark strokes.
+ *   7. Guided filter: stronger on chroma than luma, weighted by structure edges.
+ *   8. Ink-side-only unsharp on structural edges (never lighten a bright fringe).
  */
 (function (root) {
   "use strict";
@@ -995,6 +997,249 @@
   }
 
   /**
+   * Chessboard (Chebyshev) distance to the nearest set mask pixel, capped.
+   */
+  function chessboardDist(mask, w, h, cap) {
+    var n = w * h;
+    var INF = cap != null ? cap + 1 : 255;
+    var d = new Uint8Array(n);
+    var i, x, y, v;
+    for (i = 0; i < n; i++) d[i] = mask[i] ? 0 : INF;
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        i = y * w + x;
+        v = d[i];
+        if (x > 0 && d[i - 1] + 1 < v) v = d[i - 1] + 1;
+        if (y > 0 && d[i - w] + 1 < v) v = d[i - w] + 1;
+        if (x > 0 && y > 0 && d[i - w - 1] + 1 < v) v = d[i - w - 1] + 1;
+        if (x + 1 < w && y > 0 && d[i - w + 1] + 1 < v) v = d[i - w + 1] + 1;
+        d[i] = v;
+      }
+    }
+    for (y = h - 1; y >= 0; y--) {
+      for (x = w - 1; x >= 0; x--) {
+        i = y * w + x;
+        v = d[i];
+        if (x + 1 < w && d[i + 1] + 1 < v) v = d[i + 1] + 1;
+        if (y + 1 < h && d[i + w] + 1 < v) v = d[i + w] + 1;
+        if (x + 1 < w && y + 1 < h && d[i + w + 1] + 1 < v) v = d[i + w + 1] + 1;
+        if (x > 0 && y + 1 < h && d[i + w - 1] + 1 < v) v = d[i + w - 1] + 1;
+        d[i] = v;
+      }
+    }
+    return d;
+  }
+
+  /**
+   * Fill light crumbs / notches that sit on dark lineart with the surrounding
+   * ink color. Only tiny light islands (small connected non-ink components)
+   * are filled, so iris midtones, catchlights, sclera, and skin-side AA are
+   * left alone.
+   */
+  function fillInkHoles(L, A, B, L0, A0, B0, w, h) {
+    var n = w * h;
+    var i, y, x, a, nx, ny, ni, k, sp, cs, ok, bN, dMed;
+    /* 4-connected components of non-ink; only tiny ones can be holes */
+    var label = new Int32Array(n);
+    for (i = 0; i < n; i++) label[i] = -1;
+    var stack = new Int32Array(n);
+    var comp = new Int32Array(n);
+    var dirs = [1, 0, -1, 0, 0, 1, 0, -1];
+    var maxHole = 12;
+    var cid = 0;
+    var sizeOf = [];
+    var inkBorderOf = [];
+    for (i = 0; i < n; i++) {
+      if (label[i] >= 0 || L0[i] < 32) continue;
+      sp = 0;
+      stack[sp++] = i;
+      label[i] = cid;
+      cs = 0;
+      ok = 1;
+      bN = 0;
+      while (sp) {
+        k = stack[--sp];
+        comp[cs++] = k;
+        if (cs > maxHole) { ok = 0; break; }
+        y = (k / w) | 0;
+        x = k - y * w;
+        for (a = 0; a < 8; a += 2) {
+          nx = x + dirs[a];
+          ny = y + dirs[a + 1];
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          ni = ny * w + nx;
+          if (L0[ni] < 32) { bN++; continue; }
+          if (label[ni] >= 0) continue;
+          label[ni] = cid;
+          stack[sp++] = ni;
+        }
+      }
+      /* drain if overflowed so leftover pixels get a later (large) id or skip */
+      while (sp) {
+        k = stack[--sp];
+        label[k] = ok ? cid : 0x7fffffff;
+      }
+      if (!ok) {
+        /* mark the rest of this large region so we do not restart it */
+        /* BFS without size cap, label only */
+        /* The overflowing stack was drained with a sentinel; flood from
+           already-labelled cells of this cid via a second scan is heavy.
+           Instead, continue a walk from neighbours of the partial comp. */
+        var qh = 0, qt = 0;
+        var q = stack;
+        for (a = 0; a < cs; a++) q[qt++] = comp[a];
+        while (qh < qt) {
+          k = q[qh++];
+          y = (k / w) | 0;
+          x = k - y * w;
+          for (a = 0; a < 8; a += 2) {
+            nx = x + dirs[a];
+            ny = y + dirs[a + 1];
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            ni = ny * w + nx;
+            if (L0[ni] < 32) continue;
+            if (label[ni] >= 0 && label[ni] !== 0x7fffffff && label[ni] !== cid) continue;
+            if (label[ni] === cid || label[ni] === 0x7fffffff) continue;
+            /* unlabelled light */
+            if (label[ni] >= 0) continue;
+            label[ni] = 0x7fffffff;
+            q[qt++] = ni;
+          }
+        }
+        cid++;
+        sizeOf[cid - 1] = 9999;
+        inkBorderOf[cid - 1] = 0;
+        continue;
+      }
+      sizeOf[cid] = cs;
+      inkBorderOf[cid] = bN;
+      cid++;
+    }
+
+    var bufL = new Float32Array(25);
+    var bufA = new Float32Array(25);
+    var bufB = new Float32Array(25);
+    function medSmall(buf, cnt) {
+      var t, j, arr = new Float32Array(cnt);
+      var p;
+      for (p = 0; p < cnt; p++) arr[p] = buf[p];
+      for (p = 1; p < cnt; p++) {
+        t = arr[p];
+        j = p;
+        while (j > 0 && arr[j - 1] > t) { arr[j] = arr[j - 1]; j--; }
+        arr[j] = t;
+      }
+      return arr[(cnt - 1) >> 1];
+    }
+
+    for (i = 0; i < n; i++) {
+      var lab = label[i];
+      if (lab < 0 || lab === 0x7fffffff) continue;
+      if (sizeOf[lab] < 1 || sizeOf[lab] > maxHole) continue;
+      /* skip catchlights: tiny but very bright, or mixed with sclera-like light */
+      if (L0[i] > 155 || L0[i] < 40) continue;
+      /* must be a real hole: enough ink around the island */
+      if (inkBorderOf[lab] < sizeOf[lab] * 1.2 && inkBorderOf[lab] < 6) continue;
+      /* local ink median in 5x5 */
+      y = (i / w) | 0;
+      x = i - y * w;
+      var cntD = 0, dy, dx, sy, sx;
+      for (dy = -2; dy <= 2; dy++) {
+        sy = y + dy;
+        if (sy < 0 || sy >= h) continue;
+        for (dx = -2; dx <= 2; dx++) {
+          sx = x + dx;
+          if (sx < 0 || sx >= w) continue;
+          ni = sy * w + sx;
+          if (L0[ni] < 32) {
+            bufL[cntD] = L0[ni];
+            bufA[cntD] = A0[ni];
+            bufB[cntD] = B0[ni];
+            cntD++;
+          }
+        }
+      }
+      if (cntD < 6) continue;
+      dMed = medSmall(bufL, cntD);
+      if (L[i] <= dMed + 8) continue;
+      L[i] = dMed;
+      A[i] = medSmall(bufA, cntD);
+      B[i] = medSmall(bufB, cntD);
+    }
+  }
+
+  /**
+   * Close the light / white seam at the edge of a skin flat fill.
+   * Only snaps the bright fringe and the very light end of the AA ring
+   * (a few pixels) so the fill meets a natural ink-to-skin blend.
+   * Does not march down the mid-gray ramp (that hard-cuts hair and lids).
+   */
+  function sealToInk(L, A, B, filled, fillC, L0, w, h, inkDist) {
+    var n = w * h;
+    var dirs = [1, 0, -1, 0, 0, 1, 0, -1, 1, 1, 1, -1, -1, 1, -1, -1];
+    var i, k, x, y, a, nx, ny, ni, Lf, Af, Bf, Cf, hits, chromaF, chromaP;
+    var lSkin = 70;
+    /* only consider pixels already close in lightness to the fill */
+    var maxDarker = 2.5;
+    var maxLighter = 14;
+    var maxSteps = 2;
+
+    function isSkinFringe(Li, Ai, Bi, Lf, Af, Bf) {
+      if (Li < Lf - maxDarker) return 0;
+      if (Li > Lf + maxLighter) return 0;
+      chromaF = Math.sqrt(Af * Af + Bf * Bf);
+      chromaP = Math.sqrt(Ai * Ai + Bi * Bi);
+      /* sclera / lid midtone: high L, low chroma */
+      if (chromaF > 4 && chromaP < chromaF * 0.42 && Li > Lf - 1) return 0;
+      if ((Ai - Af) * (Ai - Af) + (Bi - Bf) * (Bi - Bf) > 90) return 0;
+      return 1;
+    }
+
+    /* only grow from the pre-seal fill so mid-AA cannot become a new source */
+    var seed = new Uint8Array(n);
+    for (i = 0; i < n; i++) {
+      /* skin fills only — never grow a sclera fill into the eyelid */
+      if (filled[i] && L[i] >= lSkin && (A[i] * A[i] + B[i] * B[i]) >= 36) seed[i] = 1;
+    }
+
+    var q = new Int32Array(n);
+    var depth = new Int16Array(n);
+    var head = 0, tail = 0;
+    for (i = 0; i < n; i++) {
+      if (!seed[i]) continue;
+      q[tail++] = i;
+      depth[i] = 0;
+    }
+    while (head < tail) {
+      k = q[head++];
+      if (depth[k] >= maxSteps) continue;
+      y = (k / w) | 0;
+      x = k - y * w;
+      Lf = L[k];
+      Af = A[k];
+      Bf = B[k];
+      for (a = 0; a < 16; a += 2) {
+        nx = x + dirs[a];
+        ny = y + dirs[a + 1];
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        ni = ny * w + nx;
+        if (filled[ni]) continue;
+        if (L0[ni] < 64) continue;
+        if (!isSkinFringe(L[ni], A[ni], B[ni], Lf, Af, Bf)) continue;
+        /* prefer closing a fringe that is as light as / lighter than the fill,
+           or only slightly darker (first step of the AA). */
+        L[ni] = Lf;
+        A[ni] = Af;
+        B[ni] = Bf;
+        filled[ni] = 1;
+        if (fillC) fillC[ni] = fillC[k];
+        depth[ni] = depth[k] + 1;
+        q[tail++] = ni;
+      }
+    }
+  }
+
+  /**
    * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} imageData
    * @param {{strength?:number,preserveEdges?:number,flatFill?:boolean,mask?:Uint8Array,onProgress?:Function}} [options]
    * @returns {{data:Uint8ClampedArray,width:number,height:number}}
@@ -1142,64 +1387,7 @@
         Bch[i] = B0[i];
       }
     }
-    /* fill light crumbs / notched holes that sit inside dark ink */
-    var inkBufL = new Float32Array(25);
-    var inkBufA = new Float32Array(25);
-    var inkBufB = new Float32Array(25);
-    function medSmall(buf, cnt) {
-      var k, j, t, arr = new Float32Array(cnt);
-      for (k = 0; k < cnt; k++) arr[k] = buf[k];
-      for (k = 1; k < cnt; k++) {
-        t = arr[k]; j = k;
-        while (j > 0 && arr[j - 1] > t) { arr[j] = arr[j - 1]; j--; }
-        arr[j] = t;
-      }
-      return arr[(cnt - 1) >> 1];
-    }
-    for (y = 0; y < h; y++) {
-      for (x = 0; x < w; x++) {
-        i = y * w + x;
-        if (L[i] < 50) continue;
-        var cntD = 0;
-        var dy, dx, sy, sx, ni2;
-        for (dy = -2; dy <= 2; dy++) {
-          sy = y + dy;
-          if (sy < 0 || sy >= h) continue;
-          for (dx = -2; dx <= 2; dx++) {
-            sx = x + dx;
-            if (sx < 0 || sx >= w) continue;
-            ni2 = sy * w + sx;
-            if (L0[ni2] < 42) {
-              inkBufL[cntD] = L0[ni2];
-              inkBufA[cntD] = A0[ni2];
-              inkBufB[cntD] = B0[ni2];
-              cntD++;
-            }
-          }
-        }
-        /* only fill tiny light islands sitting on ink, never a large
-           light field (sclera, skin) that merely touches a stroke */
-        var cntLgt = 25 - cntD; /* remaining 5x5 were not dark ink; recount below */
-        cntLgt = 0;
-        for (dy = -2; dy <= 2; dy++) {
-          sy = y + dy;
-          if (sy < 0 || sy >= h) continue;
-          for (dx = -2; dx <= 2; dx++) {
-            sx = x + dx;
-            if (sx < 0 || sx >= w) continue;
-            if (L0[sy * w + sx] >= 50) cntLgt++;
-          }
-        }
-        if (cntD >= 12 && cntLgt <= 8) {
-          var dMed = medSmall(inkBufL, cntD);
-          if (L[i] > dMed + 14) {
-            L[i] = dMed;
-            A[i] = medSmall(inkBufA, cntD);
-            Bch[i] = medSmall(inkBufB, cntD);
-          }
-        }
-      }
-    }
+    fillInkHoles(L, A, Bch, L0, A0, B0, w, h);
     /* Structure edges from a median-filtered *original* L, so skin
        speckles are not edges, but lineart / hair / pupils are.
        Dilate 1px to protect antialiased fringes. We never rewrite
@@ -1255,6 +1443,10 @@
         absorbEnclosed(L, A, Bch, protect, filled, fillC, L0, coarse, w, h, coarseCap, 80);
         snapSpeckles(L, A, Bch, protect, filled, fillC, L0, coarse, w, h, coarseCap);
         growFlatFill(L, A, Bch, protect, filled, fillC, L0, coarse, w, h, 6.5, coarseCap, 64);
+        var inkMask = new Uint8Array(n);
+        for (i = 0; i < n; i++) if (L0[i] < 48) inkMask[i] = 1;
+        var inkDist = chessboardDist(inkMask, w, h, 16);
+        sealToInk(L, A, Bch, filled, fillC, L0, w, h, inkDist);
       }
     } else {
       /* mild median snap only in very flat unprotected areas */
@@ -1292,7 +1484,9 @@
       if (structGrad[i] <= edgeT) continue;
       var e = (structGrad[i] - edgeT) / 10;
       if (e > 1) e = 1;
-      L[i] += (L[i] - blurL[i]) * amt * e;
+      /* ink-side only: light-side unsharp pops the white seam and crumbs */
+      var sh = (L[i] - blurL[i]) * amt * e;
+      if (sh < 0) L[i] += sh;
     }
     progress(0.97);
 
