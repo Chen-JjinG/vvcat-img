@@ -143,7 +143,7 @@
         <div class="row" style="margin-top:10px">
           <label class="check"><input type="checkbox" id="sFlatFill" checked /> 纯净平涂</label>
         </div>
-        <p class="hint">默认把大块平涂（皮肤、色块）收成干净纯色，同时保住线稿、头发与五官边缘。关闭后更接近轻度去噪。作用于背景图层；有选区时「自动」只处理选区。</p>
+        <p class="hint">默认先估计画面上的主要平涂色，再整体清洗：近白收成纯白，近黑线稿收成纯黑，各色块吸到各自的主导色，去掉 AI 脏斑和杂色；夹在线稿和填色之间的浅边不会收成白边。同时保住线稿、头发、衣纹条与五官边缘。关闭后更接近轻度去噪。作用于背景图层；有选区时「自动」只处理选区。</p>
         <div style="height:12px"></div>
         <button class="btn btn-primary btn-wide" id="btnDenoise" disabled>一键降噪</button>
       </section>
