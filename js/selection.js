@@ -12,6 +12,9 @@
     this.antsPhase = 0;
     this._edgeList = null;
     this._bounds = null;
+    this._rev = 0;
+    this._clipCanvas = null;
+    this._clipRev = -1;
   }
 
   Selection.prototype.resize = function (w, h) {
@@ -20,6 +23,7 @@
     this.mask = null;
     this._edgeList = null;
     this._bounds = null;
+    this._rev++;
   };
 
   Selection.prototype.has = function () {
@@ -30,6 +34,7 @@
     this.mask = null;
     this._edgeList = null;
     this._bounds = null;
+    this._rev++;
   };
 
   Selection.prototype.getMask = function () {
@@ -64,6 +69,7 @@
     this.mask = mask;
     this._edgeList = null;
     this._bounds = null;
+    this._rev++;
   };
 
   Selection.prototype.restore = function (snap) {
@@ -176,61 +182,159 @@
     return m;
   };
 
-  /* Procreate-like automatic selection: contiguous flood from a seed
-     with Lab distance < threshold. */
-  Selection.prototype.autoFromPoint = function (imageData, sx, sy, threshold) {
-    var w = this.w, h = this.h;
-    var m = new Uint8Array(w * h);
-    sx = Math.round(sx);
-    sy = Math.round(sy);
-    if (sx < 0 || sy < 0 || sx >= w || sy >= h) return m;
-    var data = imageData.data;
-    var i0 = (sy * w + sx) * 4;
-    var seed = C().rgbToLab(data[i0], data[i0 + 1], data[i0 + 2]);
-    var stack = [sx, sy];
-    var seen = new Uint8Array(w * h);
-    seen[sy * w + sx] = 1;
-    var labCache = new Float32Array(w * h * 3);
-    var computed = new Uint8Array(w * h);
-    function labAt(x, y) {
-      var idx = y * w + x;
-      if (!computed[idx]) {
-        var o = idx * 4;
-        var lab = C().rgbToLab(data[o], data[o + 1], data[o + 2]);
-        labCache[idx * 3] = lab.L;
-        labCache[idx * 3 + 1] = lab.a;
-        labCache[idx * 3 + 2] = lab.b;
-        computed[idx] = 1;
-      }
-      return idx;
+  /* Contiguous magic-wand flood. Lab is cached per visited pixel so
+     tolerance drags do not convert RGB again. 4-connected scanline. */
+  function AutoSession(imageData, w, h, sx, sy) {
+    this.w = w;
+    this.h = h;
+    this.data = imageData.data;
+    this.sx = sx | 0;
+    this.sy = sy | 0;
+    this.n = w * h;
+    this.lab = new Float32Array(this.n * 3);
+    this.haveLab = new Uint8Array(this.n);
+    this.mask = new Uint8Array(this.n);
+    this.threshold = -1;
+    this.bounds = { minx: this.sx, miny: this.sy, maxx: this.sx, maxy: this.sy };
+    var o = (this.sy * w + this.sx) * 4;
+    var seed = new Float32Array(3);
+    C().writeLab(this.data[o], this.data[o + 1], this.data[o + 2], seed, 0);
+    this.sL = seed[0];
+    this.sa = seed[1];
+    this.sb = seed[2];
+    this.haveLab[this.sy * w + this.sx] = 1;
+    this.lab[(this.sy * w + this.sx) * 3] = seed[0];
+    this.lab[(this.sy * w + this.sx) * 3 + 1] = seed[1];
+    this.lab[(this.sy * w + this.sx) * 3 + 2] = seed[2];
+  }
+
+  AutoSession.prototype._dist2 = function (x, y) {
+    var i = y * this.w + x;
+    var o3 = i * 3;
+    if (!this.haveLab[i]) {
+      var o = i * 4;
+      var d = this.data;
+      C().writeLab(d[o], d[o + 1], d[o + 2], this.lab, o3);
+      this.haveLab[i] = 1;
     }
-    computed[sy * w + sx] = 1;
-    labCache[(sy * w + sx) * 3] = seed.L;
-    labCache[(sy * w + sx) * 3 + 1] = seed.a;
-    labCache[(sy * w + sx) * 3 + 2] = seed.b;
-    var dirs = [1, 0, -1, 0, 0, 1, 0, -1, 1, 1, 1, -1, -1, 1, -1, -1];
-    var T = Math.max(0.5, threshold);
-    while (stack.length) {
-      var y = stack.pop();
-      var x = stack.pop();
-      m[y * w + x] = 255;
-      for (var a = 0; a < 16; a += 2) {
-        var nx = x + dirs[a], ny = y + dirs[a + 1];
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-        var ni = ny * w + nx;
-        if (seen[ni]) continue;
-        seen[ni] = 1;
-        var li = labAt(nx, ny) * 3;
-        var dL = labCache[li] - seed.L;
-        var da = labCache[li + 1] - seed.a;
-        var db = labCache[li + 2] - seed.b;
-        if (Math.sqrt(dL * dL + da * da + db * db) <= T) {
-          stack.push(nx, ny);
+    return C().labDist2(this.lab[o3], this.lab[o3 + 1], this.lab[o3 + 2], this.sL, this.sa, this.sb);
+  };
+
+  AutoSession.prototype._fill = function (limit) {
+    var w = this.w, h = this.h;
+    var mask = this.mask;
+    mask.fill(0);
+    var sx = this.sx, sy = this.sy;
+    if (sx < 0 || sy < 0 || sx >= w || sy >= h) {
+      this.bounds = { minx: 0, miny: 0, maxx: -1, maxy: -1 };
+      return;
+    }
+    var self = this;
+    function ok(x, y) { return self._dist2(x, y) <= limit; }
+    var stackX = [];
+    var stackY = [];
+    stackX.push(sx);
+    stackY.push(sy);
+    var minx = sx, miny = sy, maxx = sx, maxy = sy;
+    while (stackX.length) {
+      var y = stackY.pop();
+      var x = stackX.pop();
+      var row = y * w;
+      if (mask[row + x]) continue;
+      var lx = x;
+      while (lx > 0 && ok(lx - 1, y) && !mask[row + lx - 1]) lx--;
+      var rx = x;
+      while (rx < w - 1 && ok(rx + 1, y) && !mask[row + rx + 1]) rx++;
+      if (lx < minx) minx = lx;
+      if (rx > maxx) maxx = rx;
+      if (y < miny) miny = y;
+      if (y > maxy) maxy = y;
+      var up = false;
+      var down = false;
+      for (var i = lx; i <= rx; i++) {
+        mask[row + i] = 255;
+        if (y > 0) {
+          var above = (y - 1) * w + i;
+          if (!mask[above] && ok(i, y - 1)) {
+            if (!up) { stackX.push(i); stackY.push(y - 1); up = true; }
+          } else up = false;
+        }
+        if (y < h - 1) {
+          var below = (y + 1) * w + i;
+          if (!mask[below] && ok(i, y + 1)) {
+            if (!down) { stackX.push(i); stackY.push(y + 1); down = true; }
+          } else down = false;
         }
       }
     }
-    return m;
+    this.bounds = { minx: minx, miny: miny, maxx: maxx, maxy: maxy };
   };
+
+  AutoSession.prototype.ensure = function (threshold) {
+    var t = threshold < 0.5 ? 0.5 : threshold > 140 ? 140 : threshold;
+    if (this.threshold >= 0 && Math.abs(t - this.threshold) < 0.34) return this.mask;
+    this.threshold = t;
+    this._fill(t * t);
+    return this.mask;
+  };
+
+  Selection.prototype.autoFromPoint = function (imageData, sx, sy, threshold) {
+    var session = new AutoSession(imageData, this.w, this.h, Math.round(sx), Math.round(sy));
+    var mask = session.ensure(threshold);
+    var copy = new Uint8Array(mask.length);
+    copy.set(mask);
+    return copy;
+  };
+
+  Selection.prototype.traceEdges = function (mask, w, h, bounds) {
+    var list = [];
+    if (!mask) return list;
+    w = w || this.w;
+    h = h || this.h;
+    var x0 = 0, y0 = 0, x1 = w - 1, y1 = h - 1;
+    if (bounds && bounds.maxx >= bounds.minx) {
+      x0 = bounds.minx; y0 = bounds.miny; x1 = bounds.maxx; y1 = bounds.maxy;
+    }
+    for (var y = y0; y <= y1; y++) {
+      var row = y * w;
+      var up = y > 0 ? row - w : -1;
+      var down = y < h - 1 ? row + w : -1;
+      for (var x = x0; x <= x1; x++) {
+        if (!mask[row + x]) continue;
+        if (
+          x === 0 || y === 0 || x === w - 1 || y === h - 1 ||
+          !mask[row + x - 1] || !mask[row + x + 1] ||
+          up < 0 || !mask[up + x] || down < 0 || !mask[down + x]
+        ) list.push(x, y);
+      }
+    }
+    return list;
+  };
+
+  function paintAnts(ctx, edges, phase) {
+    if (!edges || !edges.length) return;
+    var p = phase | 0;
+    var i, x, y;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.beginPath();
+    for (i = 0; i < edges.length; i += 2) {
+      x = edges[i]; y = edges[i + 1];
+      if (((x + y + p) & 7) < 4) continue;
+      ctx.rect(x, y, 1, 1);
+    }
+    ctx.fillStyle = "#1a1a1c";
+    ctx.fill();
+    ctx.beginPath();
+    for (i = 0; i < edges.length; i += 2) {
+      x = edges[i]; y = edges[i + 1];
+      if (((x + y + p) & 7) >= 4) continue;
+      ctx.rect(x, y, 1, 1);
+    }
+    ctx.fillStyle = "#f4f1ea";
+    ctx.fill();
+    ctx.restore();
+  }
 
   Selection.prototype.invert = function () {
     if (!this.mask) {
@@ -379,32 +483,27 @@
 
   Selection.prototype.drawAnts = function (ctx, phase) {
     if (!this.mask) return;
-    var list = this.ensureEdges();
-    var p = phase == null ? this.antsPhase : phase;
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    for (var i = 0; i < list.length; i += 2) {
-      var x = list[i], y = list[i + 1];
-      var on = ((x + y + p) & 7) < 4;
-      ctx.fillStyle = on ? "#f4f1ea" : "#1a1a1c";
-      ctx.fillRect(x, y, 1, 1);
-    }
-    ctx.restore();
+    paintAnts(ctx, this.ensureEdges(), phase == null ? this.antsPhase : phase);
+  };
+
+  Selection.prototype.drawEdgeAnts = function (ctx, edges, phase) {
+    paintAnts(ctx, edges, phase);
   };
 
   /* Clip a drawing operation to the (possibly feathered) selection. */
   Selection.prototype.constrainCanvas = function () {
     if (!this.mask) return null;
+    if (this._clipCanvas && this._clipRev === this._rev) return this._clipCanvas;
     var c = document.createElement("canvas");
     c.width = this.w;
     c.height = this.h;
     var ctx = c.getContext("2d");
     var id = ctx.createImageData(this.w, this.h);
     var d = id.data, m = this.mask;
-    for (var i = 0; i < m.length; i++) {
-      d[i * 4 + 3] = m[i];
-    }
+    for (var i = 0; i < m.length; i++) d[i * 4 + 3] = m[i];
     ctx.putImageData(id, 0, 0);
+    this._clipCanvas = c;
+    this._clipRev = this._rev;
     return c;
   };
 
@@ -417,4 +516,5 @@
 
   global.DN = global.DN || {};
   global.DN.Selection = Selection;
+  global.DN.AutoSession = AutoSession;
 })(typeof window !== "undefined" ? window : self);

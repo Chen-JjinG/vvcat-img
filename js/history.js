@@ -25,8 +25,23 @@
     if (this.index < this.stack.length - 1) {
       this.stack.length = this.index + 1;
     }
+    var layers = null;
+    if (snap.layers) {
+      layers = snap.layers.map(function (layer) {
+        return {
+          id: layer.id,
+          name: layer.name,
+          kind: layer.kind,
+          visible: layer.visible,
+          data: cloneImageData(layer.data),
+        };
+      });
+    }
     this.stack.push({
       label: label || "编辑",
+      layers: layers,
+      seq: snap.seq || 1,
+      activeId: snap.activeId || 0,
       bg: cloneImageData(snap.bg),
       retouch: cloneImageData(snap.retouch),
       selection: cloneMask(snap.selection),
