@@ -30,6 +30,27 @@
     return Math.sqrt(dL * dL + da * da + db * db);
   }
 
+  /* Write L,a,b into out[i], out[i+1], out[i+2] without allocating. */
+  function writeLab(r, g, b, out, i) {
+    var R = LIN[r & 255],
+      G = LIN[g & 255],
+      B = LIN[b & 255];
+    var x = (R * 0.4124564 + G * 0.3575761 + B * 0.1804375) / 0.95047;
+    var y = R * 0.2126729 + G * 0.7151522 + B * 0.072175;
+    var z = (R * 0.0193339 + G * 0.119192 + B * 0.9503041) / 1.08883;
+    var fx = x > 0.008856 ? Math.cbrt(x) : 7.787037 * x + 16 / 116;
+    var fy = y > 0.008856 ? Math.cbrt(y) : 7.787037 * y + 16 / 116;
+    var fz = z > 0.008856 ? Math.cbrt(z) : 7.787037 * z + 16 / 116;
+    out[i] = 116 * fy - 16;
+    out[i + 1] = 500 * (fx - fy);
+    out[i + 2] = 200 * (fy - fz);
+  }
+
+  function labDist2(L1, a1, b1, L2, a2, b2) {
+    var dL = L1 - L2, da = a1 - a2, db = b1 - b2;
+    return dL * dL + da * da + db * db;
+  }
+
   function rgbToHsv(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     var max = Math.max(r, g, b),
@@ -94,7 +115,9 @@
   global.DN.Color = {
     clamp: clamp,
     rgbToLab: rgbToLab,
+    writeLab: writeLab,
     labDist: labDist,
+    labDist2: labDist2,
     rgbToHsv: rgbToHsv,
     hsvToRgb: hsvToRgb,
     toHex: toHex,

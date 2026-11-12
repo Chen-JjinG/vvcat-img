@@ -6,8 +6,9 @@
   <meta name="color-scheme" content="dark" />
   <title>净色 · AI 图像色块降噪</title>
   <meta name="description" content="本地网页工具：消除 AI 绘图中的脏色块与噪点，并支持选区、画笔与油漆桶手工修饰。无需服务器。" />
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%23d98655'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/png" href="assets/logo/logo.png" />
   <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/cat-companion.css" />
 </head>
 <body>
   <div class="app" id="app">
@@ -24,6 +25,10 @@
           <div class="brand-sub">色块降噪 · 修饰</div>
         </div>
       </div>
+      <a class="radio-link" href="https://vvcat-radio.pages.dev/" aria-label="猫队的收音机" title="回到猫队的收音机">
+        <img src="assets/logo/logo.png" alt="" width="24" height="24" />
+        <span>猫队的收音机</span>
+      </a>
 
       <div class="top-cluster">
         <button class="icon-btn" id="btnUndo" data-tip="撤销 ⌘Z" aria-label="撤销" disabled>
@@ -63,8 +68,8 @@
     </header>
 
     <nav class="rail" aria-label="工具">
-      <button class="tool active" data-tool="auto" data-tip="自动选区 S" aria-label="自动选区" title="自动选区">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l5.2 14 2.4-6.4L19 10.4 5 5z"/><path d="M16.5 16.5l3 3"/></svg>
+      <button class="tool active" data-tool="auto" data-tip="魔法工具（自动选区） S" aria-label="魔法工具（自动选区）" title="魔法工具（自动选区）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20.2 11.6 12.2"/><path d="M14.6 4.6 15.7 7.1 18.2 8.2 15.7 9.3 14.6 11.8 13.5 9.3 11 8.2 13.5 7.1Z"/><path d="M18.6 3.2v2.4M17.4 4.4h2.4"/></svg>
       </button>
       <button class="tool" data-tool="lasso" data-tip="套索 L" aria-label="套索">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8.5c0-2.5 2.4-4.5 5.4-4.5 3.4 0 5.6 2.2 5.6 5.1 0 5.6-8 6.2-8 9.4"/></svg>
@@ -85,8 +90,8 @@
       <button class="tool" data-tool="eraser" data-tip="橡皮 E" aria-label="橡皮">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 5.2l3.6 3.6-8.8 8.8H6.4L4.2 15.4 15.2 5.2z"/><path d="M6.5 18.8h13"/></svg>
       </button>
-      <button class="tool" data-tool="fill" data-tip="油漆桶 G" aria-label="油漆桶">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l8-8 7 7-8 8-7-7z"/><path d="M9 7.5l7 7"/><path d="M17.5 17c1.4 0 2.5 1 2.5 2.2S19 21.5 17.5 21.5"/></svg>
+      <button class="tool" data-tool="fill" data-tip="油漆桶 G" aria-label="油漆桶" title="油漆桶">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 10.2h9.2l-1.25 7.1a1.6 1.6 0 0 1-1.55 1.3H9a1.6 1.6 0 0 1-1.55-1.3L6.2 10.2z"/><path d="M5.2 10.2h11.2"/><path d="M8.5 10.2c.15-2.3 1.35-3.9 2.7-3.9s2.55 1.6 2.7 3.9"/><path d="M17.3 14.6c0 1.55 1.15 2.55 1.15 2.55s1.15-1 1.15-2.55-1.15-2.15-1.15-2.15-1.15.6-1.15 2.15z"/></svg>
       </button>
       <button class="tool" data-tool="eyedropper" data-tip="吸管 I · 按住 Alt" aria-label="吸管">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5l4 4-9.5 9.5H5v-4L14.5 5.5z"/><path d="M16.2 3.8l4 4"/></svg>
@@ -157,35 +162,23 @@
           <button class="btn" id="btnContract" disabled>收缩</button>
           <button class="btn" id="btnFeather" disabled>羽化</button>
         </div>
-        <p class="hint">自动选区：点按颜色，向右拖提高容差、向左降低。Shift 相加，Alt 相减。</p>
+        <p class="hint">魔法工具：点按颜色即圈出连通区域，左右拖动调整容差。Shift 相加，Alt 相减。</p>
       </section>
 
       <section class="side-section">
-        <h2 class="side-title">图层</h2>
-        <div class="layer-list">
-          <div class="layer" id="layerRetouch">
-            <button class="eye" id="eyeRetouch" aria-label="显示修饰层" title="显示/隐藏">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 12S6.5 5.5 12 5.5 21.5 12 21.5 12 17.5 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
-            </button>
-            <div class="thumb" id="thumbRetouch"></div>
-            <div class="name">修饰</div>
-          </div>
-          <div class="layer" id="layerBg">
-            <button class="eye" id="eyeBg" aria-label="显示背景" title="显示/隐藏">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 12S6.5 5.5 12 5.5 21.5 12 21.5 12 17.5 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
-            </button>
-            <div class="thumb" id="thumbBg"></div>
-            <div class="name">背景</div>
-          </div>
+        <div class="layer-head">
+          <h2 class="side-title">图层</h2>
+          <button type="button" class="layer-add" id="btnNewLayer" aria-label="新建图层" title="新建图层" disabled>+</button>
         </div>
-        <p class="hint">画笔、橡皮、油漆桶和涂抹画在修饰层，可随时擦掉。降噪写回背景。</p>
+        <div class="layer-list" id="layerList"></div>
+        <p class="hint">点选图层后，画笔、橡皮、油漆桶和涂抹画在当前层。＋ 加在当前层之上。降噪写回背景，背景不能删除。</p>
       </section>
     </aside>
 
     <footer class="status">
       <span id="statSize">未打开图片</span>
       <span id="statZoom">—</span>
-      <span id="statTool">自动选区</span>
+      <span id="statTool">魔法工具</span>
       <span id="statSel">无选区</span>
       <span class="grow" id="statHint">图片仅在本地处理</span>
     </footer>
@@ -206,7 +199,7 @@
       <table class="shortcuts">
         <thead><tr><th>工具</th><th>选择</th></tr></thead>
         <tbody>
-          <tr><td>自动选区 / 套索 / 矩形 / 椭圆</td><td><kbd>S</kbd> <kbd>L</kbd> <kbd>M</kbd> <kbd>⇧M</kbd></td></tr>
+          <tr><td>魔法工具 / 套索 / 矩形 / 椭圆</td><td><kbd>S</kbd> <kbd>L</kbd> <kbd>M</kbd> <kbd>⇧M</kbd></td></tr>
           <tr><td>画笔 / 橡皮 / 油漆桶 / 吸管 / 涂抹</td><td><kbd>B</kbd> <kbd>E</kbd> <kbd>G</kbd> <kbd>I</kbd> <kbd>U</kbd></td></tr>
           <tr><td>平移</td><td><kbd>H</kbd> 或按住空格拖动</td></tr>
           <tr><td>临时吸管</td><td>按住 <kbd>Alt</kbd></td></tr>
@@ -225,6 +218,21 @@
 
   <input type="file" id="fileInput" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp" hidden />
 
+  <aside class="vvcat cat-companion" id="catCompanion" aria-label="回到收音机的小猫">
+    <div class="vvcat-panel" id="catPanel">
+      <div class="vvcat-controls">
+        <a class="vvcat-hint" href="https://vvcat-radio.pages.dev/">回到收音机</a>
+        <button class="vvcat-dock" type="button" aria-label="将小猫收至屏幕边缘" title="收起小猫，也可拖到屏幕边缘"><span aria-hidden="true">›</span></button>
+      </div>
+      <a class="vvcat-figure" href="https://vvcat-radio.pages.dev/" aria-label="回到猫队的收音机" draggable="false">
+        <img class="vvcat-fallback" src="assets/cat/cat.png" alt="" width="2048" height="2048" draggable="false" />
+        <canvas class="vvcat-sprite" data-sprite="assets/vvcat-motions.webp" width="240" height="240" aria-hidden="true"></canvas>
+        <span class="vvcat-grab" aria-hidden="true"></span>
+      </a>
+    </div>
+    <button class="vvcat-tab" type="button" aria-label="展开小猫" aria-controls="catPanel" aria-expanded="false" title="展开小猫"><img src="assets/logo/logo.png" alt="" width="20" height="20" /><span aria-hidden="true">‹</span></button>
+  </aside>
+
   <script src="js/color.js"></script>
   <script src="js/denoise-core.js"></script>
   <script src="js/history.js"></script>
@@ -232,6 +240,7 @@
   <script src="js/layers.js"></script>
   <script src="js/selection.js"></script>
   <script src="js/tools.js"></script>
+  <script src="js/cat-companion.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

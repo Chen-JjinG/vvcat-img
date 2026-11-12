@@ -41,7 +41,7 @@
   var hsv = DN.Color.rgbToHsv(212, 154, 122);
 
   var TOOL_NAMES = {
-    auto: "自动选区",
+    auto: "魔法工具",
     lasso: "套索",
     rect: "矩形选区",
     ellipse: "椭圆选区",
@@ -179,16 +179,17 @@
   function render(ts) {
     ts = ts || 0;
     var size = resizeView();
-    if (ts - lastAnts > 80) {
+      if (ts - lastAnts > 80) {
       antsPhase = (antsPhase + 1) & 255;
       lastAnts = ts;
-      if (selection.has() || (draft && draft.mask)) needsRender = true;
+      if (selection.has() || (draft && draft.edges && draft.edges.length)) needsRender = true;
     }
     if (!needsRender) {
       requestAnimationFrame(render);
       return;
     }
     needsRender = false;
+    flushAutoDraft();
     var ctx = viewCanvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.w, size.h);
@@ -230,7 +231,9 @@
       ctx.restore();
 
       if (draft) drawDraft(ctx);
-      if (selection.has() && !(draft && draft.mask)) selection.drawAnts(ctx, antsPhase);
+      if (selection.has() && !(draft && draft.kind === "auto" && draft.mode === "replace")) {
+        selection.drawAnts(ctx, antsPhase);
+      }
       ctx.restore();
 
       if (splitOn && !holdCompare) {
@@ -288,33 +291,15 @@
       }
       ctx.restore();
     }
+    if (draft.kind === "auto" && draft.edges) selection.drawEdgeAnts(ctx, draft.edges, antsPhase);
   }
 
-  /* putImageData breaks transform — draw auto-select preview via an offscreen canvas */
-  var draftCanvas = document.createElement("canvas");
-  function drawDraftOverlay(ctx) {
-    if (!draft || !draft.mask) return;
-    if (draftCanvas.width !== layers.w || draftCanvas.height !== layers.h) {
-      draftCanvas.width = layers.w;
-      draftCanvas.height = layers.h;
-    }
-    var tctx = draftCanvas.getContext("2d");
-    var id = tctx.createImageData(layers.w, layers.h);
-    var d = id.data, m = draft.mask;
-    for (var i = 0; i < m.length; i++) {
-      if (!m[i]) continue;
-      d[i * 4] = 232; d[i * 4 + 1] = 155; d[i * 4 + 2] = 109; d[i * 4 + 3] = 100;
-    }
-    tctx.putImageData(id, 0, 0);
-    ctx.drawImage(draftCanvas, 0, 0);
+  function flushAutoDraft() {
+    if (!draft || draft.kind !== "auto" || !draft.dirty) return;
+    draft.dirty = false;
+    draft.mask = draft.session.ensure(draft.threshold);
+    draft.edges = selection.traceEdges(draft.mask, layers.w, layers.h, draft.session.bounds);
   }
-
-  /* patch render's draft drawing: we'll hook in a cleaner render path below by replacing drawDraft usage */
-  var _drawDraftOrig = drawDraft;
-  drawDraft = function (ctx) {
-    if (draft && draft.mask) drawDraftOverlay(ctx);
-    _drawDraftOrig(ctx);
-  };
 
   function drawBrushCursor(ctx) {
     var t = effectiveTool();
@@ -444,6 +429,7 @@
     });
     renderProps();
     syncCursor();
+    syncPaintHint();
     $("statTool").textContent = TOOL_NAMES[name] || name;
     requestDraw();
   }
@@ -474,7 +460,7 @@
     }
     if (t === "auto") {
       html += slider("pSelT", "容差", 1, 80, tools.selectThreshold, function (v) { return String(v); });
-      html += '<span class="prop" style="color:var(--muted)">点按并左右拖动可实时调整容差</span>';
+      html += '<span class="prop" style="color:var(--muted)">点按即可圈选，左右拖动调整容差</span>';
     }
     if (t === "brush" || t === "fill" || t === "eyedropper") {
       html += '<button class="color-well" id="pColor" title="颜色" aria-label="颜色"></button>';
@@ -665,6 +651,7 @@
   stage.addEventListener("pointermove", onMove);
   stage.addEventListener("pointerup", onUp);
   stage.addEventListener("pointercancel", onUp);
+  stage.addEventListener("pointercancel", onUp);
   stage.addEventListener("pointerenter", function () { pointerOver = true; requestDraw(); });
   stage.addEventListener("pointerleave", function () {
     pointerOver = false;
@@ -701,10 +688,16 @@
       return;
     }
     if (t === "fill") {
-      tools.fill(layers, selection, p.x, p.y);
-      commit("油漆桶");
-      updateThumbs();
-      requestDraw();
+      if (selection.has() && !selection.contains(p.x, p.y)) {
+        $("statHint").textContent = "油漆桶仅在选区内填充";
+        return;
+      }
+      if (tools.fill(layers, selection, p.x, p.y)) {
+        commit("油漆桶");
+        updateThumbs();
+        requestDraw();
+      }
+      syncPaintHint();
       return;
     }
     if (t === "brush" || t === "eraser" || t === "smudge") {
@@ -715,14 +708,20 @@
     if (isSelectTool(t)) {
       var mode = shiftDown ? "add" : altDown ? "subtract" : "replace";
       if (t === "auto") {
+        var ix = Math.round(p.x), iy = Math.round(p.y);
+        if (ix < 0 || iy < 0 || ix >= layers.w || iy >= layers.h) return;
         var th = tools.selectThreshold;
+        var session = new DN.AutoSession(layers.getCompositeImageData(), layers.w, layers.h, ix, iy);
+        var mask = session.ensure(th);
         draft = {
           kind: "auto",
-          x0: p.x, y0: p.y, sx: p.sx,
+          x0: ix, y0: iy, sx: p.sx,
           threshold: th,
           mode: mode,
-          mask: selection.autoFromPoint(layers.getCompositeImageData(), p.x, p.y, th),
-          image: layers.getCompositeImageData(),
+          session: session,
+          mask: mask,
+          edges: selection.traceEdges(mask, layers.w, layers.h, session.bounds),
+          dirty: false,
         };
         requestDraw();
       } else if (t === "lasso") {
@@ -770,8 +769,11 @@
     if (draft) {
       if (draft.kind === "auto") {
         var dx = p.sx - draft.sx;
-        draft.threshold = DN.Color.clamp(tools.selectThreshold + dx / 4, 1, 120);
-        draft.mask = selection.autoFromPoint(draft.image, draft.x0, draft.y0, draft.threshold);
+        var next = DN.Color.clamp(tools.selectThreshold + dx / 4, 1, 120);
+        if (Math.abs(next - draft.threshold) >= 0.5) {
+          draft.threshold = next;
+          draft.dirty = true;
+        }
         if ($("pSelT")) {
           $("pSelT").value = String(Math.round(draft.threshold));
           if ($("pSelTVal")) $("pSelTVal").textContent = String(Math.round(draft.threshold));
@@ -927,6 +929,29 @@
     $("btnContract").disabled = !has;
     $("btnFeather").disabled = !has;
     $("statSel").textContent = has ? "已有选区" : "无选区";
+    syncPaintHint();
+  }
+  var PAINT_HINTS = {
+    "画笔仅在选区内绘制": 1,
+    "橡皮仅在选区内绘制": 1,
+    "涂抹仅在选区内绘制": 1,
+    "油漆桶仅在选区内填充": 1,
+    "当前图层已隐藏，绘制不会显示": 1,
+  };
+  function syncPaintHint() {
+    if (!hasImage()) return;
+    var t = tools.name;
+    var layer = layers.activeLayer();
+    var painting = t === "brush" || t === "eraser" || t === "smudge" || t === "fill";
+    var hint = "";
+    if (layer && !layer.visible && painting) hint = "当前图层已隐藏，绘制不会显示";
+    else if (selection.has() && t === "brush") hint = "画笔仅在选区内绘制";
+    else if (selection.has() && t === "eraser") hint = "橡皮仅在选区内绘制";
+    else if (selection.has() && t === "smudge") hint = "涂抹仅在选区内绘制";
+    else if (selection.has() && t === "fill") hint = "油漆桶仅在选区内填充";
+    var el = $("statHint");
+    if (hint) el.textContent = hint;
+    else if (PAINT_HINTS[el.textContent]) el.textContent = "图片仅在本地处理";
   }
   function syncUI() {
     var on = hasImage();
@@ -934,6 +959,7 @@
     $("btnExport").disabled = !on;
     $("btnReset").disabled = !on;
     $("btnCompare").disabled = !on;
+    if ($("btnNewLayer")) $("btnNewLayer").disabled = !on;
     $("statSize").textContent = on ? layers.w + " × " + layers.h : "未打开图片";
     syncZoom();
     syncHistory();
@@ -941,24 +967,50 @@
     syncCursor();
   }
 
+  var EYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 12S6.5 5.5 12 5.5 21.5 12 21.5 12 17.5 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
   function updateThumbs() {
-    function paint(el, src, clear) {
-      el.innerHTML = "";
-      if (!src || layers.isEmpty()) return;
+    var list = $("layerList");
+    if (!list) return;
+    list.innerHTML = "";
+    if (layers.isEmpty()) return;
+    var sc = Math.min(32 / layers.w, 32 / layers.h);
+    var dw = layers.w * sc, dh = layers.h * sc;
+    layers.stack.forEach(function (layer) {
+      var row = document.createElement("div");
+      row.className = "layer" + (layer.id === layers.activeId ? " active" : "");
+      row.dataset.id = String(layer.id);
+      var eye = document.createElement("button");
+      eye.type = "button";
+      eye.className = "eye" + (layer.visible ? "" : " off");
+      eye.title = "显示/隐藏";
+      eye.setAttribute("aria-label", (layer.visible ? "隐藏" : "显示") + layer.name);
+      eye.innerHTML = EYE_SVG;
+      var thumb = document.createElement("div");
+      thumb.className = "thumb";
       var c = document.createElement("canvas");
-      c.width = 64; c.height = 64;
+      c.width = 32; c.height = 32;
       var ctx = c.getContext("2d");
       ctx.fillStyle = "#111";
-      ctx.fillRect(0, 0, 64, 64);
-      var sc = Math.min(64 / layers.w, 64 / layers.h);
-      if (clear) {
-        /* empty retouch looks transparent */
+      ctx.fillRect(0, 0, 32, 32);
+      ctx.drawImage(layer.canvas, (32 - dw) / 2, (32 - dh) / 2, dw, dh);
+      thumb.appendChild(c);
+      var name = document.createElement("div");
+      name.className = "name";
+      name.textContent = layer.name;
+      row.appendChild(eye);
+      row.appendChild(thumb);
+      row.appendChild(name);
+      if (layers.canDelete(layer.id)) {
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "layer-del";
+        del.title = "删除图层";
+        del.setAttribute("aria-label", "删除" + layer.name);
+        del.textContent = "×";
+        row.appendChild(del);
       }
-      ctx.drawImage(src, (64 - layers.w * sc) / 2, (64 - layers.h * sc) / 2, layers.w * sc, layers.h * sc);
-      el.appendChild(c);
-    }
-    paint($("thumbBg"), layers.bg);
-    paint($("thumbRetouch"), layers.retouch);
+      list.appendChild(row);
+    });
   }
 
   document.querySelectorAll(".tool").forEach(function (btn) {
@@ -1086,15 +1138,37 @@
     requestDraw();
   });
 
-  $("eyeBg").addEventListener("click", function () {
-    layers.bgVisible = !layers.bgVisible;
-    $("eyeBg").classList.toggle("off", !layers.bgVisible);
+  $("btnNewLayer").addEventListener("click", function () {
+    if (!hasImage()) return;
+    layers.addLayer();
+    commit("新建图层");
+    updateThumbs();
+    syncPaintHint();
     requestDraw();
   });
-  $("eyeRetouch").addEventListener("click", function () {
-    layers.retouchVisible = !layers.retouchVisible;
-    $("eyeRetouch").classList.toggle("off", !layers.retouchVisible);
-    requestDraw();
+  $("layerList").addEventListener("click", function (e) {
+    var row = e.target.closest(".layer");
+    if (!row) return;
+    var id = Number(row.dataset.id);
+    if (e.target.closest(".eye")) {
+      layers.toggleVisible(id);
+      commit("图层可见性");
+      updateThumbs();
+      syncPaintHint();
+      requestDraw();
+      return;
+    }
+    if (e.target.closest(".layer-del")) {
+      if (!layers.removeLayer(id)) return;
+      commit("删除图层");
+      updateThumbs();
+      syncPaintHint();
+      requestDraw();
+      return;
+    }
+    layers.setActive(id);
+    updateThumbs();
+    syncPaintHint();
   });
 
   $("btnHelp").addEventListener("click", function () { $("helpModal").classList.add("show"); });
@@ -1185,6 +1259,13 @@
   renderProps();
   setTool("auto");
   syncUI();
+  if (window.VvcatCompanion) {
+    window.VvcatCompanion.mount($("catCompanion"), {
+      header: document.querySelector(".topbar"),
+      footer: document.querySelector(".status"),
+      storageKey: "vvcatImgCatCompanionPos",
+    });
+  }
   requestAnimationFrame(render);
   if (/[?&#]demo\b/.test(location.search + location.hash)) {
     loadDemo();

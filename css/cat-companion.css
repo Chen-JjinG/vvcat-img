@@ -1,0 +1,116 @@
+.vvcat {
+  position: fixed;
+  right: var(--vvcat-right);
+  bottom: var(--vvcat-bottom);
+  z-index: var(--vvcat-z, 70);
+  width: var(--vvcat-width);
+  pointer-events: none;
+  transform: translateX(var(--vvcat-offset, 0px));
+  transition: transform .32s cubic-bezier(.2, .7, .25, 1);
+}
+.vvcat-panel { padding-top: 26px; }
+.vvcat-controls {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.vvcat-figure {
+  position: relative;
+  display: block;
+  aspect-ratio: 1;
+  transition: transform .24s ease, opacity .24s ease;
+}
+.vvcat-sprite, .vvcat-fallback { display: block; width: 100%; height: auto; }
+.vvcat-sprite, .vvcat-ready .vvcat-fallback { display: none; }
+.vvcat-ready .vvcat-sprite { display: block; }
+.vvcat-grab {
+  position: absolute;
+  inset: 7% 23% 7% 24%;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+.vvcat.is-dragging .vvcat-grab { cursor: grabbing; }
+.vvcat-hint, .vvcat-dock, .vvcat-tab {
+  color: var(--vvcat-ink);
+  background: var(--vvcat-surface);
+  border: 1px solid var(--vvcat-line);
+  border-radius: 5px;
+  font: 600 11px/1.2 system-ui, sans-serif;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.vvcat-hint { display: flex; align-items: center; gap: 4px; padding: 4px 6px; }
+.vvcat-dock { display: grid; place-items: center; width: 28px; min-height: 26px; padding: 0; cursor: pointer; }
+.vvcat-hint span, .vvcat-tab span { color: var(--vvcat-accent); }
+.vvcat-hint:hover, .vvcat-dock:hover, .vvcat-tab:hover { border-color: var(--vvcat-accent); }
+.vvcat-hint:focus-visible, .vvcat-dock:focus-visible, .vvcat-tab:focus-visible {
+  outline: 2px solid var(--vvcat-accent);
+  outline-offset: 1px;
+}
+.vvcat-tab {
+  position: absolute;
+  right: 0;
+  bottom: 16%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 36px;
+  min-height: 34px;
+  padding: 2px 4px;
+  visibility: hidden;
+  cursor: pointer;
+}
+.vvcat-tab:focus-visible { outline-offset: -3px; }
+.vvcat[data-edge=left] .vvcat-tab { left: 0; right: auto; flex-direction: row-reverse; }
+.vvcat[data-edge=left] .vvcat-tab span { transform: scaleX(-1); }
+.vvcat[data-dock=left] { --vvcat-direction: -1; }
+.vvcat[data-dock=right] { --vvcat-direction: 1; }
+.vvcat[data-dock] .vvcat-figure {
+  opacity: 0;
+  transform: translateX(calc(var(--vvcat-direction) * 72%)) scale(.75);
+}
+.vvcat[data-dock] .vvcat-controls, .vvcat[data-dock] .vvcat-grab { visibility: hidden; }
+.vvcat[data-dock] .vvcat-tab { visibility: visible; }
+.vvcat[data-docking] .vvcat-figure {
+  opacity: 1;
+  transform: translateX(calc(var(--vvcat-direction) * 5.9375%));
+}
+.vvcat[data-dock=left] .vvcat-sprite { transform: scaleX(-1); }
+@media (prefers-reduced-motion: reduce) {
+  .vvcat, .vvcat-figure { transition: none; }
+}
+
+/* Tokens from the radio site's .cat-companion block.
+   --white is #fffaf0 and --orange-deep is #b95b25 in radio css/styles.css.
+   No bottom player here, so the cat sits a small gap above the status bar.
+   z-index stays above the canvas and below the color dialog (20) and help modal (30). */
+.cat-companion {
+  --vvcat-right: 4%;
+  --vvcat-bottom: calc(var(--status, 28px) + 8px);
+  --vvcat-width: clamp(104px, 11vw, 150px);
+  --vvcat-z: 18;
+  --vvcat-ink: #5c4c3a;
+  --vvcat-surface: #fffaf0;
+  --vvcat-line: #9f7950;
+  --vvcat-accent: #b95b25;
+}
+.cat-companion .vvcat-dock { font-size: 18px; }
+.vvcat-hint, .vvcat-figure { text-decoration: none; }
+
+/* Right-hand tool panel starts at this width; keep the cat on the canvas. */
+@media (min-width: 901px) {
+  .cat-companion { --vvcat-right: calc(var(--side) + 12px); }
+}
+@media (max-width: 760px) {
+  .cat-companion {
+    --vvcat-right: 5px;
+    --vvcat-width: 104px;
+  }
+}
