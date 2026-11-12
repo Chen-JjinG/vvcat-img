@@ -1182,16 +1182,28 @@
     /* only consider pixels already close in lightness to the fill */
     var maxDarker = 2.5;
     var maxLighter = 14;
-    var maxSteps = 2;
+    var maxStepsDark = 2;
+    /* bright / equal-L fringe may be wider than 2 px; mid-gray AA is not */
+    var maxStepsLight = 6;
 
-    function isSkinFringe(Li, Ai, Bi, Lf, Af, Bf) {
-      if (Li < Lf - maxDarker) return 0;
+    function isSkinFringe(Li, Ai, Bi, Lf, Af, Bf, lightOnly) {
+      if (Li < Lf - (lightOnly ? 0.8 : maxDarker)) return 0;
       if (Li > Lf + maxLighter) return 0;
       chromaF = Math.sqrt(Af * Af + Bf * Bf);
       chromaP = Math.sqrt(Ai * Ai + Bi * Bi);
-      /* sclera / lid midtone: high L, low chroma */
-      if (chromaF > 4 && chromaP < chromaF * 0.42 && Li > Lf - 1) return 0;
-      if ((Ai - Af) * (Ai - Af) + (Bi - Bf) * (Bi - Bf) > 90) return 0;
+      var dAB2 = (Ai - Af) * (Ai - Af) + (Bi - Bf) * (Bi - Bf);
+      if (Li >= Lf - 1) {
+        /* Accept anything v4 already accepted (C/Cf>=0.42, dAB<=9.5),
+           plus paler peach fringes with strong hue alignment.
+           Mid-lid C/Cf~0.18 cos~0.85; sclera C/Cf~0.04. */
+        var cos = (chromaP * chromaF > 1e-6) ? (Ai * Af + Bi * Bf) / (chromaP * chromaF) : 0;
+        var classic = chromaP >= chromaF * 0.42 && dAB2 <= 90;
+        var pale = chromaP >= chromaF * 0.28 && cos >= 0.90 && dAB2 <= 121;
+        if (chromaF > 4 && !classic && !pale) return 0;
+      } else {
+        if (chromaF > 4 && chromaP < chromaF * 0.42) return 0;
+        if (dAB2 > 90) return 0;
+      }
       return 1;
     }
 
@@ -1212,7 +1224,7 @@
     }
     while (head < tail) {
       k = q[head++];
-      if (depth[k] >= maxSteps) continue;
+      if (depth[k] >= maxStepsLight) continue;
       y = (k / w) | 0;
       x = k - y * w;
       Lf = L[k];
@@ -1225,15 +1237,22 @@
         ni = ny * w + nx;
         if (filled[ni]) continue;
         if (L0[ni] < 64) continue;
-        if (!isSkinFringe(L[ni], A[ni], B[ni], Lf, Af, Bf)) continue;
-        /* prefer closing a fringe that is as light as / lighter than the fill,
-           or only slightly darker (first step of the AA). */
+        var light = L[ni] >= Lf - 0.8;
+        var nextD = depth[k] + 1;
+        if (light) {
+          if (nextD > maxStepsLight) continue;
+        } else {
+          if (nextD > maxStepsDark) continue;
+        }
+        if (!isSkinFringe(L[ni], A[ni], B[ni], Lf, Af, Bf, light)) continue;
+        /* Close a bright / equal-L fringe for several steps; only take
+           one or two steps into slightly darker AA. */
         L[ni] = Lf;
         A[ni] = Af;
         B[ni] = Bf;
         filled[ni] = 1;
         if (fillC) fillC[ni] = fillC[k];
-        depth[ni] = depth[k] + 1;
+        depth[ni] = nextD;
         q[tail++] = ni;
       }
     }
